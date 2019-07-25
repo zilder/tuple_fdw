@@ -1,0 +1,5 @@
+# postgres_fdw extension
+comment = 'alternative heap tuple storage'
+default_version = '0.1'
+module_pathname = '$libdir/tuple_fdw'
+relocatable = true
