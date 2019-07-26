@@ -2,18 +2,16 @@
 #include <sys/stat.h>
 
 #include "postgres.h"
-#include "fmgr.h"
 
 #include "access/reloptions.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/defrem.h"
-#include "commands/explain.h"
 #include "foreign/fdwapi.h"
-#include "optimizer/planmain.h"
-#include "utils/builtins.h"
-#include "utils/elog.h"
-
+#include "foreign/foreign.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/planmain.h"
+#include "parser/parsetree.h"
+#include "utils/elog.h"
 
 
 PG_MODULE_MAGIC;
@@ -127,7 +125,7 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
     }
 
     if (!filename_provided)
-        elog(ERROR, ELOG_PREFIX "filename required");
+        elog(ERROR, ELOG_PREFIX "filename is required");
 
     PG_RETURN_VOID();
 }
@@ -159,6 +157,26 @@ tupleGetForeignPaths(PlannerInfo *root,
                                      NULL));
 }
 
+static List *
+extract_table_options(Oid relid)
+{
+	ForeignTable   *table;
+    List           *fdw_private = NIL;
+    ListCell       *lc;
+
+    table = GetForeignTable(relid);
+
+    foreach(lc, table->options)
+    {
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "filename") == 0)
+            fdw_private = lappend(fdw_private, def->arg);
+    }
+
+    return fdw_private;
+}
+
 static ForeignScan *
 tupleGetForeignPlan(PlannerInfo *root,
                       RelOptInfo *baserel,
@@ -168,10 +186,9 @@ tupleGetForeignPlan(PlannerInfo *root,
                       List *scan_clauses,
                       Plan *outer_plan)
 {
-    char *path = "/tmp/heap";
-    List *fdw_private;
+    List       *fdw_private;
 
-    fdw_private = list_make1(makeString(path));
+    fdw_private = extract_table_options(foreigntableid);
 
 	/* Create the ForeignScan node */
 	return make_foreignscan(tlist,
@@ -190,16 +207,18 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     TupleFdwState  *tstate;
 	ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;
     List           *fdw_private = plan->fdw_private;
-    char           *path;
+    char           *filename;
 
     tstate = palloc(sizeof(TupleFdwState));
-    path = strVal(linitial(fdw_private));
+
+    Assert(list_length(fdw_private) == 1);
+    filename = strVal(linitial(fdw_private));
 
     /* open file */
-    if ((tstate->file = fopen(path, "r")) == NULL)
+    if ((tstate->file = fopen(filename, "r")) == NULL)
     {
         const char *err = strerror(errno);
-        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", path, err);
+        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
     }
 
     node->fdw_state = tstate;
@@ -250,9 +269,9 @@ tuplePlanForeignModify(PlannerInfo *root,
                        Index resultRelation,
                        int subplan_index)
 {
-    char *path = "/tmp/heap";
+	RangeTblEntry *rte = planner_rt_fetch(resultRelation, root);
 
-    return list_make1(makeString(path));
+    return extract_table_options(rte->relid);
 }
 
 static void
@@ -263,10 +282,10 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
 						int eflags)
 {
     TupleFdwState *tstate = palloc(sizeof(TupleFdwState));
-    char *path = strVal(linitial(fdw_private));
+    char *filename = strVal(linitial(fdw_private));
 
     /* open file */
-    tstate->file = fopen(path, "a");
+    tstate->file = fopen(filename, "a");
 
 	resultRelInfo->ri_FdwState = tstate;
 }
