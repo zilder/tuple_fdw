@@ -18,6 +18,8 @@
 
 PG_MODULE_MAGIC;
 
+#define ELOG_PREFIX "tuple_fdw: "
+
 typedef struct TupleFdwState
 {
     FILE *file;
@@ -90,6 +92,43 @@ PG_FUNCTION_INFO_V1(tuple_fdw_validator);
 Datum
 tuple_fdw_validator(PG_FUNCTION_ARGS)
 {
+    List       *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+    Oid         catalog = PG_GETARG_OID(1);
+    ListCell   *lc;
+    bool        filename_provided = false;
+
+    /* Only check table options */
+    if (catalog != ForeignTableRelationId)
+        PG_RETURN_VOID();
+
+    foreach(lc, options_list)
+    {
+        DefElem    *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "filename") == 0)
+        {
+            struct stat stat_buf;
+
+            if (stat(defGetString(def), &stat_buf) != 0)
+            {
+                const char *err = strerror(errno);
+
+                ereport(ERROR,
+                        (errmsg(ELOG_PREFIX "%s", err)));
+            }
+            filename_provided = true;
+        }
+        else
+        {
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+                     errmsg(ELOG_PREFIX "unknown option: '%s'", def->defname)));
+        }
+    }
+
+    if (!filename_provided)
+        elog(ERROR, ELOG_PREFIX "filename required");
+
     PG_RETURN_VOID();
 }
 
@@ -159,7 +198,8 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     /* open file */
     if ((tstate->file = fopen(path, "r")) == NULL)
     {
-        elog(ERROR, "tuple_fdw: %s", strerror(errno));
+        const char *err = strerror(errno);
+        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", path, err);
     }
 
     node->fdw_state = tstate;
