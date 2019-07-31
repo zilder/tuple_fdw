@@ -106,13 +106,15 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
         if (strcmp(def->defname, "filename") == 0)
         {
             struct stat stat_buf;
+            const char *filename = defGetString(def);
 
-            if (stat(defGetString(def), &stat_buf) != 0)
+            if (stat(filename, &stat_buf) != 0)
             {
                 const char *err = strerror(errno);
 
                 ereport(ERROR,
-                        (errmsg(ELOG_PREFIX "%s", err)));
+                        (errmsg(ELOG_PREFIX "cannot get file status for '%s': %s",
+                                filename, err)));
             }
             filename_provided = true;
         }
@@ -250,7 +252,11 @@ tupleIterateForeignScan(ForeignScanState *node)
     tuple->t_len = len;
     tuple->t_data = (HeapTupleHeader) data;
 
+#if PG_VERSION_NUM < 120000
+    ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+#else
     ExecStoreHeapTuple(tuple, slot, false);
+#endif
 
     return slot;
 }
@@ -301,7 +307,11 @@ tupleExecForeignInsert(EState *estate,
     HeapTuple       tuple;
     char           *buf;
 
+#if PG_VERSION_NUM < 120000
+	tuple = ExecCopySlotTuple(slot);
+#else
 	tuple = ExecCopySlotHeapTuple(slot);
+#endif
 
     /* TODO */
     buf = palloc0(8 + tuple->t_len);
