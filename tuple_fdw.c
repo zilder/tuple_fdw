@@ -11,6 +11,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "parser/parsetree.h"
+#include "storage/fd.h"
 #include "utils/elog.h"
 
 
@@ -217,7 +218,7 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     filename = strVal(linitial(fdw_private));
 
     /* open file */
-    if ((tstate->file = fopen(filename, "r")) == NULL)
+    if ((tstate->file = AllocateFile(filename, PG_BINARY_R)) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
@@ -266,7 +267,7 @@ tupleEndForeignScan(ForeignScanState *node)
 {
 	TupleFdwState *tstate = (TupleFdwState *) node->fdw_state;
 
-    fclose(tstate->file);
+    FreeFile(tstate->file);
 }
 
 static List *
@@ -291,7 +292,11 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
     char *filename = strVal(linitial(fdw_private));
 
     /* open file */
-    tstate->file = fopen(filename, "a");
+    if ((tstate->file = AllocateFile(filename, PG_BINARY_A)) == NULL)
+    {
+        const char *err = strerror(errno);
+        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
+    }
 
 	resultRelInfo->ri_FdwState = tstate;
 }
@@ -318,12 +323,6 @@ tupleExecForeignInsert(EState *estate,
     memcpy(buf, (char *) &tuple->t_len, 4);
     memcpy(buf + 8, (char *) tuple->t_data, tuple->t_len);
 
-    /* write tuple length first */
-    //fwrite(&tuple->t_len, 4, 1, tstate->file);
-
-    /* then tuple data itself */
-    //fwrite(&tuple->t_data, tuple->t_len, 1, tstate->file);
-
     fwrite(buf, 1, tuple->t_len + 8, tstate->file);
     pfree(buf);
 
@@ -336,5 +335,5 @@ tupleEndForeignModify(EState *estate,
 {
 	TupleFdwState *tstate = (TupleFdwState *) resultRelInfo->ri_FdwState;
 
-    fclose(tstate->file);
+    FreeFile(tstate->file);
 }
