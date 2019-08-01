@@ -1,13 +1,11 @@
 MODULE_big = tuple_fdw
-OBJS = tuple.o tuple_fdw.o 
+OBJS = storage.o tuple_fdw.o 
 PGFILEDESC = "tuple_fdw - foreign data wrapper for tuple"
 
 SHLIB_LINK = #-lm
 
 EXTENSION = tuple_fdw
 DATA = tuple_fdw--0.1.sql
-
-OBJS = tuple_fdw.o
 
 REGRESS = tuple_fdw
 

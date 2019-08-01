@@ -11,18 +11,14 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "parser/parsetree.h"
-#include "storage/fd.h"
 #include "utils/elog.h"
+
+#include "storage.h"
 
 
 PG_MODULE_MAGIC;
 
 #define ELOG_PREFIX "tuple_fdw: "
-
-typedef struct TupleFdwState
-{
-    FILE *file;
-} TupleFdwState;
 
 
 void _PG_init(void);
@@ -207,30 +203,33 @@ tupleGetForeignPlan(PlannerInfo *root,
 static void
 tupleBeginForeignScan(ForeignScanState *node, int eflags)
 {
-    TupleFdwState  *tstate;
+    StorageState   *state;
 	ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;
     List           *fdw_private = plan->fdw_private;
     char           *filename;
 
-    tstate = palloc(sizeof(TupleFdwState));
+    state = palloc(sizeof(StorageState));
 
     Assert(list_length(fdw_private) == 1);
     filename = strVal(linitial(fdw_private));
 
     /* open file */
+#if 0
     if ((tstate->file = AllocateFile(filename, PG_BINARY_R)) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
     }
+#endif
+    StorageInit(state, filename);
 
-    node->fdw_state = tstate;
+    node->fdw_state = state;
 }
 
 static TupleTableSlot *
 tupleIterateForeignScan(ForeignScanState *node)
 {
-	TupleFdwState *tstate = (TupleFdwState *) node->fdw_state;
+    StorageState   *state = (StorageState *) node->fdw_state;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
     int64    len = 0;
     char   *data;
@@ -239,7 +238,7 @@ tupleIterateForeignScan(ForeignScanState *node)
 	ExecClearTuple(slot);
 
     /* read tuple data size */
-    if (fread(&len, 8, 1, tstate->file) == 0)
+    if (fread(&len, 8, 1, state->file) == 0)
     {
         /*TODO: check for errors */
         return slot;
@@ -247,7 +246,7 @@ tupleIterateForeignScan(ForeignScanState *node)
 
     /* read data */
     data = palloc(len);
-    fread(data, len, 1, tstate->file);
+    fread(data, len, 1, state->file);
 
     tuple = palloc(sizeof(HeapTupleData));
     tuple->t_len = len;
@@ -265,9 +264,9 @@ tupleIterateForeignScan(ForeignScanState *node)
 static void
 tupleEndForeignScan(ForeignScanState *node)
 {
-	TupleFdwState *tstate = (TupleFdwState *) node->fdw_state;
+	StorageState *state = (StorageState *) node->fdw_state;
 
-    FreeFile(tstate->file);
+    StorageRelease(state);
 }
 
 static List *
@@ -283,34 +282,36 @@ tuplePlanForeignModify(PlannerInfo *root,
 
 static void
 tupleBeginForeignModify(ModifyTableState *mtstate,
-						ResultRelInfo *resultRelInfo,
-						List *fdw_private,
-						int subplan_index,
-						int eflags)
+                        ResultRelInfo *resultRelInfo,
+                        List *fdw_private,
+                        int subplan_index,
+                        int eflags)
 {
-    TupleFdwState *tstate = palloc(sizeof(TupleFdwState));
+    StorageState *state = palloc(sizeof(StorageState));
     char *filename = strVal(linitial(fdw_private));
 
+#if 0
     /* open file */
     if ((tstate->file = AllocateFile(filename, PG_BINARY_A)) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
     }
+#endif
+    StorageInit(state, filename);
 
-	resultRelInfo->ri_FdwState = tstate;
+	resultRelInfo->ri_FdwState = state;
 }
 
 static TupleTableSlot *
 tupleExecForeignInsert(EState *estate,
-						  ResultRelInfo *resultRelInfo,
-						  TupleTableSlot *slot,
-						  TupleTableSlot *planSlot)
+                       ResultRelInfo *resultRelInfo,
+                       TupleTableSlot *slot,
+                       TupleTableSlot *planSlot)
 {
-	TupleFdwState  *tstate = (TupleFdwState *) resultRelInfo->ri_FdwState;
+	StorageState  *state = (StorageState *) resultRelInfo->ri_FdwState;
 	TupleTableSlot *rslot = slot;
     HeapTuple       tuple;
-    char           *buf;
 
 #if PG_VERSION_NUM < 120000
 	tuple = ExecCopySlotTuple(slot);
@@ -319,12 +320,15 @@ tupleExecForeignInsert(EState *estate,
 #endif
 
     /* TODO */
+#if 0
     buf = palloc0(8 + tuple->t_len);
     memcpy(buf, (char *) &tuple->t_len, 4);
     memcpy(buf + 8, (char *) tuple->t_data, tuple->t_len);
 
     fwrite(buf, 1, tuple->t_len + 8, tstate->file);
     pfree(buf);
+#endif
+    StorageInsertTuple(state, tuple);
 
     return rslot;
 }
@@ -333,7 +337,7 @@ static void
 tupleEndForeignModify(EState *estate,
                       ResultRelInfo *resultRelInfo)
 {
-	TupleFdwState *tstate = (TupleFdwState *) resultRelInfo->ri_FdwState;
+	StorageState *state = (StorageState *) resultRelInfo->ri_FdwState;
 
-    FreeFile(tstate->file);
+    StorageRelease(state);
 }
