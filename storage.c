@@ -44,6 +44,17 @@ storage_write(StorageState *state, const void *ptr, Size size)
     }
 }
 
+static inline void
+storage_read(StorageState *state, const void *ptr, Size size)
+{
+    if (fread((char *) ptr, 1, size, state->file) != size)
+    {
+        const char *err = strerror(errno);
+
+        elog(ERROR, "read failed: %s", err);
+    }
+}
+
 /* Storage file manipulations */
 
 static void
@@ -76,17 +87,14 @@ load_last_block(StorageState *state)
 
     /* read the last block */
     storage_seek(state, state->file_header.last_block_offset);
-    bytes = fread(state->last_block.data, 1, BLOCK_SIZE, state->file);
+    bytes = fread(state->cur_block.data, 1, BLOCK_SIZE, state->file);
     if (bytes == BLOCK_SIZE)
     {
-        state->last_block.offset = state->file_header.last_block_offset;
-        state->last_block.status = BS_LOADED;
+        state->cur_block.offset = state->file_header.last_block_offset;
+        state->cur_block.status = BS_LOADED;
     }
     else
     {
-        char *err = strerror(errno);
-
-        elog(NOTICE, "fread failed: %s", err);
         allocate_new_block(state);
     }
 }
@@ -101,7 +109,7 @@ find_last_tuple_offset(StorageState *state)
     {
         StorageTupleHeader  *st_header;
 
-        st_header = (StorageTupleHeader *) (state->last_block.data + off);
+        st_header = (StorageTupleHeader *) (state->cur_block.data + off);
 
         if (st_header->length == 0)
             break;
@@ -109,39 +117,39 @@ find_last_tuple_offset(StorageState *state)
         off = off + st_header->length + sizeof(StorageTupleHeader);
     }
 
-    state->last_offset = off;
+    state->cur_offset = off;
 }
 
 static void
 flush_last_block(StorageState *state)
 {
-    Assert(state->last_block.status != BS_INVALID);
+    Assert(state->cur_block.status != BS_INVALID);
 
-    if (state->last_block.status == BS_LOADED)
+    if (state->cur_block.status == BS_LOADED)
     {
         /* no modifications were made */
         return;
     }
 
-    storage_seek(state, state->last_block.offset);
-    storage_write(state, state->last_block.data, BLOCK_SIZE);
+    storage_seek(state, state->cur_block.offset);
+    storage_write(state, state->cur_block.data, BLOCK_SIZE);
 
     /* if new block is being flushed overwrite the file header */
-    if (state->last_block.status == BS_NEW)
+    if (state->cur_block.status == BS_NEW)
     {
-        state->file_header.last_block_offset = state->last_block.offset;
+        state->file_header.last_block_offset = state->cur_block.offset;
         write_storage_file_header(state);
-        state->last_block.status = BS_LOADED;
+        state->cur_block.status = BS_LOADED;
     }
 }
 
 static void
 allocate_new_block(StorageState *state)
 {
-    Block *block = &state->last_block;
+    Block *block = &state->cur_block;
 
     if (block->offset != 0)
-        block->offset = state->last_block.offset + BLOCK_SIZE;
+        block->offset = state->cur_block.offset + BLOCK_SIZE;
     else
     {
         /*
@@ -154,7 +162,7 @@ allocate_new_block(StorageState *state)
     memset(block->data, 0, BLOCK_SIZE);
     block->status = BS_NEW;
 
-    state->last_offset = 0;
+    state->cur_offset = 0;
 }
 
 void
@@ -174,14 +182,14 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
     StorageTupleHeader st_header;
     char *buf;
 
-    if (state->last_block.status == BS_INVALID)
+    if (state->cur_block.status == BS_INVALID)
     {
         load_last_block(state);
         find_last_tuple_offset(state);
     }
 
     /* does the tuple fit current block? */
-    if (state->last_offset + tuple->t_len + sizeof(StorageTupleHeader) > BLOCK_SIZE)
+    if (state->cur_offset + tuple->t_len + sizeof(StorageTupleHeader) > BLOCK_SIZE)
     {
         /* if not, create new block */
         flush_last_block(state);
@@ -190,23 +198,79 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
 
     /* write tuple length and the tuple itself to the block */
     st_header.length = tuple->t_len;
-    buf = state->last_block.data + state->last_offset;
+    buf = state->cur_block.data + state->cur_offset;
     memcpy(buf, &st_header, sizeof(StorageTupleHeader));
     memcpy(buf + sizeof(StorageTupleHeader), tuple->t_data, tuple->t_len);
 
-    if (state->last_block.status != BS_NEW)
-        state->last_block.status = BS_MODIFIED;
+    if (state->cur_block.status != BS_NEW)
+        state->cur_block.status = BS_MODIFIED;
 }
 
-void
-StorageReadTuple(StorageState *state, HeapTuple *tuple)
+static bool
+load_next_block(StorageState *state)
 {
+    Size    offset;
+    Size    bytes;
+
+    if (state->cur_block.status == BS_INVALID)
+    {
+        /* we're about to read the first block in the file */
+        offset = sizeof(StorageFileHeader);
+    }
+    else
+        offset = state->cur_block.offset + BLOCK_SIZE;
+
+    /* read the block */
+    storage_seek(state, offset);
+    bytes = fread(state->cur_block.data, 1, BLOCK_SIZE, state->file);
+    if (bytes == BLOCK_SIZE)
+    {
+        state->cur_block.offset = offset;
+        state->cur_block.status = BS_LOADED;
+        state->cur_offset = 0;
+        return true;
+    }
+    else
+        return false;
+}
+
+
+HeapTuple
+StorageReadTuple(StorageState *state)
+{
+    StorageTupleHeader *st_header;
+    HeapTuple   tuple;
+    Size        tuple_offset;
+    char       *data;
+
+    /* TODO: cur_offset + sizeof(StorageTupleHeader) actually */
+    if (state->cur_block.status == BS_INVALID || state->cur_offset > BLOCK_SIZE)
+        if (!load_next_block(state))
+            return NULL;
+
+    //storage_seek(state, state->cur_offset);
+    //storage_read(state, &st_header, sizeof(StorageTupleHeader));
+    st_header = (StorageTupleHeader *) (state->cur_block.data + state->cur_offset);
+    if (st_header->length == 0)
+        return NULL;
+
+    data = palloc(st_header->length);
+    tuple_offset = state->cur_offset + sizeof(StorageTupleHeader);
+    memcpy(data, state->cur_block.data + tuple_offset, st_header->length);
+
+    tuple = palloc0(sizeof(HeapTupleData));
+    tuple->t_len = st_header->length;
+    tuple->t_data = (HeapTupleHeader) data;
+
+    state->cur_offset += st_header->length + sizeof(StorageTupleHeader);
+
+    return tuple;
 }
 
 void
 StorageRelease(StorageState *state)
 {
-    BlockStatus status = state->last_block.status;
+    BlockStatus status = state->cur_block.status;
 
     /* flush pending block */
     if (status == BS_NEW || status == BS_MODIFIED)

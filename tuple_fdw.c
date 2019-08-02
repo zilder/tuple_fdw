@@ -231,26 +231,12 @@ tupleIterateForeignScan(ForeignScanState *node)
 {
     StorageState   *state = (StorageState *) node->fdw_state;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
-    int64    len = 0;
-    char   *data;
     HeapTuple tuple;
 
 	ExecClearTuple(slot);
 
-    /* read tuple data size */
-    if (fread(&len, 8, 1, state->file) == 0)
-    {
-        /*TODO: check for errors */
+    if ((tuple =StorageReadTuple(state)) == NULL)
         return slot;
-    }
-
-    /* read data */
-    data = palloc(len);
-    fread(data, len, 1, state->file);
-
-    tuple = palloc(sizeof(HeapTupleData));
-    tuple->t_len = len;
-    tuple->t_data = (HeapTupleHeader) data;
 
 #if PG_VERSION_NUM < 120000
     ExecStoreTuple(tuple, slot, InvalidBuffer, false);
