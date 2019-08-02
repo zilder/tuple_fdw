@@ -208,7 +208,7 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     List           *fdw_private = plan->fdw_private;
     char           *filename;
 
-    state = palloc(sizeof(StorageState));
+    state = palloc0(sizeof(StorageState));
 
     Assert(list_length(fdw_private) == 1);
     filename = strVal(linitial(fdw_private));
@@ -287,7 +287,7 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
                         int subplan_index,
                         int eflags)
 {
-    StorageState *state = palloc(sizeof(StorageState));
+    StorageState *state = palloc0(sizeof(StorageState));
     char *filename = strVal(linitial(fdw_private));
 
 #if 0

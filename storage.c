@@ -37,7 +37,11 @@ static inline void
 storage_write(StorageState *state, const void *ptr, Size size)
 {
     if (fwrite((char *) ptr, 1, size, state->file) != size)
-        elog(ERROR, "write failed");
+    {
+        const char *err = strerror(errno);
+
+        elog(ERROR, "write failed: %s", err);
+    }
 }
 
 /* Storage file manipulations */
@@ -72,7 +76,7 @@ load_last_block(StorageState *state)
 
     /* read the last block */
     storage_seek(state, state->file_header.last_block_offset);
-    bytes = fread(state->last_block.data, BLOCK_SIZE, 1,  state->file);
+    bytes = fread(state->last_block.data, 1, BLOCK_SIZE, state->file);
     if (bytes == BLOCK_SIZE)
     {
         state->last_block.offset = state->file_header.last_block_offset;
@@ -80,6 +84,9 @@ load_last_block(StorageState *state)
     }
     else
     {
+        char *err = strerror(errno);
+
+        elog(NOTICE, "fread failed: %s", err);
         allocate_new_block(state);
     }
 }
@@ -90,12 +97,16 @@ find_last_tuple_offset(StorageState *state)
     Size    off = 0;
 
     /* iterate over tuples in the block */
-    while (off < BLOCK_SIZE && state->last_block.data[off] > 0)
+    while (off < BLOCK_SIZE)
     {
-        StorageTupleHeader  st_header;
+        StorageTupleHeader  *st_header;
 
-        fread(&st_header, sizeof(StorageTupleHeader), 1, state->file);
-        off = off + st_header.length;
+        st_header = (StorageTupleHeader *) (state->last_block.data + off);
+
+        if (st_header->length == 0)
+            break;
+
+        off = off + st_header->length + sizeof(StorageTupleHeader);
     }
 
     state->last_offset = off;
@@ -118,6 +129,7 @@ flush_last_block(StorageState *state)
     /* if new block is being flushed overwrite the file header */
     if (state->last_block.status == BS_NEW)
     {
+        state->file_header.last_block_offset = state->last_block.offset;
         write_storage_file_header(state);
         state->last_block.status = BS_LOADED;
     }
@@ -128,7 +140,17 @@ allocate_new_block(StorageState *state)
 {
     Block *block = &state->last_block;
 
-    block->offset = state->last_block.offset + BLOCK_SIZE;
+    if (block->offset != 0)
+        block->offset = state->last_block.offset + BLOCK_SIZE;
+    else
+    {
+        /*
+         * this is the first block in the storage, it goes straight next to
+         * the file header
+         */
+        block->offset = sizeof(StorageFileHeader);
+    }
+
     memset(block->data, 0, BLOCK_SIZE);
     block->status = BS_NEW;
 
@@ -138,7 +160,7 @@ allocate_new_block(StorageState *state)
 void
 StorageInit(StorageState *state, const char *filename)
 {
-    if ((state->file = AllocateFile(filename, PG_BINARY_W)) == NULL)
+    if ((state->file = AllocateFile(filename, "r+")) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
@@ -174,6 +196,11 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
 
     if (state->last_block.status != BS_NEW)
         state->last_block.status = BS_MODIFIED;
+}
+
+void
+StorageReadTuple(StorageState *state, HeapTuple *tuple)
+{
 }
 
 void

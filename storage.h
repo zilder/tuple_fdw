@@ -4,7 +4,8 @@
 #include "access/htup.h"
 
 
-#define BLOCK_SIZE 1024 * 1024  /* 1 megabyte */
+//#define BLOCK_SIZE 1024 * 1024  /* 1 megabyte */
+#define BLOCK_SIZE 8096
 
 typedef enum
 {
@@ -37,12 +38,15 @@ typedef struct
     /* TODO: add exclusive write lock */
     FILE       *file;
     StorageFileHeader    file_header;
+
+    /* Data fields used for inserts */
     Block       last_block;
     Size        last_offset;    /* offset within the last_block */
 } StorageState;
 
 void StorageInit(StorageState *state, const char *filename);
 void StorageInsertTuple(StorageState *state, HeapTuple tuple);
+void StorageReadTuple(StorageState *state, HeapTuple *tuple);
 void StorageRelease(StorageState *state);
 
 #endif /* TUPLE_STORAGE_H */
