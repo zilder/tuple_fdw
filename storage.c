@@ -204,6 +204,9 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
 
     if (state->cur_block.status != BS_NEW)
         state->cur_block.status = BS_MODIFIED;
+
+    /* advance the current offset */
+    state->cur_offset += st_header.length + sizeof(StorageTupleHeader);
 }
 
 static bool
