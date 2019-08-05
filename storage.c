@@ -81,6 +81,21 @@ read_storage_file_header(StorageState *state)
     }
 }
 
+static void
+decompress_block(StorageState *state, char *compressed_data, Size len)
+{
+    Size size;
+
+    size = LZ4_decompress_safe(compressed_data,
+                               state->cur_block.data,
+                               len,
+                               BLOCK_SIZE);
+    if (size < 0)
+        elog(ERROR, "tuple_fdw: decompression failed");
+
+    Assert(BLOCK_SIZE == size);
+}
+
 static bool
 read_block(StorageState* state, Size offset)
 {
@@ -101,15 +116,7 @@ read_block(StorageState* state, Size offset)
     bytes = fread(compressed_data, 1, block_header.compressed_size, state->file);
     if (bytes == block_header.compressed_size)
     {
-        int     size;
-
-        /* decompress */
-        size = LZ4_decompress_safe(compressed_data, state->cur_block.data,
-                                   block_header.compressed_size, BLOCK_SIZE);
-        if (size < 0)
-            elog(ERROR, "tuple_fdw: decompression failed");
-
-        Assert(BLOCK_SIZE == size);
+        decompress_block(state, compressed_data, block_header.compressed_size);
 
         state->cur_block.offset = offset;
         state->cur_block.status = BS_LOADED;
@@ -178,12 +185,34 @@ find_last_tuple_offset(StorageState *state)
     state->cur_offset = off;
 }
 
+static StorageBlockHeader *
+compress_current_block(StorageState *state)
+{
+    Size    estimate;
+    Size    size;
+    StorageBlockHeader *block_header;
+
+    estimate = LZ4_compressBound(BLOCK_SIZE);
+    block_header = (StorageBlockHeader *) \
+        palloc0(StorageBlockHeaderSize + estimate);
+
+    size = LZ4_compress_fast(state->cur_block.data,
+                             block_header->data,
+                             BLOCK_SIZE,
+                             estimate,
+                             1); /* TODO: configurable? */
+    if (size == 0)
+        elog(ERROR, "tuple_fdw: compression failed");
+    block_header->compressed_size = size;
+
+    return block_header;
+}
+
 static void
 flush_last_block(StorageState *state)
 {
-    Size    estimated_size;
-    Size    compressed_size;
     StorageBlockHeader *block_header;
+    Size                block_size;
 
     Assert(!BlockIsInvalid(state->cur_block));
 
@@ -194,23 +223,14 @@ flush_last_block(StorageState *state)
     }
 
     /* compress */
-    estimated_size = LZ4_compressBound(BLOCK_SIZE);
-    block_header = \
-        (StorageBlockHeader *) palloc0(StorageBlockHeaderSize + estimated_size);
-    compressed_size = LZ4_compress_fast(state->cur_block.data,
-                                        block_header->data,
-                                        BLOCK_SIZE,
-                                        estimated_size,
-                                        1); /* TODO: configurable? */
-    if (compressed_size == 0)
-        elog(ERROR, "tuple_fdw: compression failed");
-    block_header->compressed_size = compressed_size;
+    block_header = compress_current_block(state);
+    block_size = StorageBlockHeaderSize + block_header->compressed_size;
 
     /* write out to disk */
     storage_seek(state, state->cur_block.offset);
-    storage_write(state, block_header, StorageBlockHeaderSize + compressed_size);
+    storage_write(state, block_header, block_size);
 
-    state->cur_block.compressed_size = compressed_size;
+    state->cur_block.compressed_size = block_header->compressed_size;
 
     /* if new block is being flushed overwrite the file header */
     if (state->cur_block.status == BS_NEW)
