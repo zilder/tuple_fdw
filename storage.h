@@ -24,7 +24,10 @@ typedef struct
 typedef struct
 {
     Size length;
+    char data[];
 } StorageTupleHeader;
+
+#define StorageTupleHeaderSize offsetof(StorageTupleHeader, data)
 
 typedef struct
 {
