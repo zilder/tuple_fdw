@@ -4,8 +4,7 @@
 #include "access/htup.h"
 
 
-//#define BLOCK_SIZE 1024 * 1024  /* 1 megabyte */
-#define BLOCK_SIZE 8096
+#define BLOCK_SIZE 1024 * 1024  /* 1 megabyte */
 
 typedef enum
 {
@@ -14,6 +13,8 @@ typedef enum
     BS_LOADED,
     BS_MODIFIED
 } BlockStatus;
+
+#define BlockIsInvalid(block) ((block).status == BS_INVALID)
 
 typedef struct
 {
@@ -28,6 +29,8 @@ typedef struct
 } StorageTupleHeader;
 
 #define StorageTupleHeaderSize offsetof(StorageTupleHeader, data)
+#define GetCurrentTuple(state) \
+    (StorageTupleHeader *) ((state)->cur_block.data + (state)->cur_offset)
 
 typedef struct
 {

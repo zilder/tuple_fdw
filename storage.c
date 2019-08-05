@@ -123,7 +123,7 @@ find_last_tuple_offset(StorageState *state)
 static void
 flush_last_block(StorageState *state)
 {
-    Assert(state->cur_block.status != BS_INVALID);
+    Assert(!BlockIsInvalid(state->cur_block));
 
     if (state->cur_block.status == BS_LOADED)
     {
@@ -183,7 +183,7 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
     char *buf;
     Size tuple_length = tuple->t_len + StorageTupleHeaderSize;
 
-    if (state->cur_block.status == BS_INVALID)
+    if (BlockIsInvalid(state->cur_block))
     {
         load_last_block(state);
         find_last_tuple_offset(state);
@@ -216,7 +216,7 @@ load_next_block(StorageState *state)
     Size    offset;
     Size    bytes;
 
-    if (state->cur_block.status == BS_INVALID)
+    if (BlockIsInvalid(state->cur_block))
     {
         /* we're about to read the first block in the file */
         offset = sizeof(StorageFileHeader);
@@ -242,17 +242,21 @@ load_next_block(StorageState *state)
 HeapTuple
 StorageReadTuple(StorageState *state)
 {
-    StorageTupleHeader *st_header;
+    StorageTupleHeader *st_header = GetCurrentTuple(state);
     HeapTuple   tuple;
 
     /* TODO: cur_offset + sizeof(StorageTupleHeader) actually */
-    if (state->cur_block.status == BS_INVALID || state->cur_offset > BLOCK_SIZE)
+    if (BlockIsInvalid(state->cur_block) || state->cur_offset > BLOCK_SIZE
+        || st_header->length == 0)
+    {
         if (!load_next_block(state))
             return NULL;
 
-    st_header = (StorageTupleHeader *) (state->cur_block.data + state->cur_offset);
-    if (st_header->length == 0)
-        return NULL;
+        /* read the first tuple in the block */
+        st_header = GetCurrentTuple(state);
+        if (st_header->length == 0)
+            return NULL;
+    }
 
     tuple = palloc0(sizeof(HeapTupleData));
     tuple->t_len = st_header->length;
