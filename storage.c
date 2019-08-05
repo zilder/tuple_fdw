@@ -1,5 +1,6 @@
 #include "postgres.h"
 #include "storage/fd.h"
+#include "lz4.h"
 
 #include "storage.h"
 
@@ -80,15 +81,72 @@ read_storage_file_header(StorageState *state)
     }
 }
 
+static bool
+read_block(StorageState* state, Size offset)
+{
+    StorageBlockHeader block_header;
+    char   *compressed_data;
+    Size    bytes;
+
+    /* read the block */
+    storage_seek(state, offset);
+
+    bytes = fread(&block_header, 1, StorageBlockHeaderSize, state->file);
+    if (bytes != StorageBlockHeaderSize)
+        return false;
+
+    Assert(block_header.compressed_size > 0);
+
+    compressed_data = palloc(block_header.compressed_size);
+    bytes = fread(compressed_data, 1, block_header.compressed_size, state->file);
+    if (bytes == block_header.compressed_size)
+    {
+        int     size;
+
+        /* decompress */
+        size = LZ4_decompress_safe(compressed_data, state->cur_block.data,
+                                   block_header.compressed_size, BLOCK_SIZE);
+        if (size < 0)
+            elog(ERROR, "tuple_fdw: decompression failed");
+
+        Assert(BLOCK_SIZE == size);
+
+        state->cur_block.offset = offset;
+        state->cur_block.status = BS_LOADED;
+        state->cur_block.compressed_size = block_header.compressed_size;
+        state->cur_offset = 0;
+        return true;
+    }
+    else
+        return false;
+
+}
+
+static bool
+load_next_block(StorageState *state)
+{
+    Size    offset;
+
+    if (BlockIsInvalid(state->cur_block))
+    {
+        /* we're about to read the first block in the file */
+        offset = sizeof(StorageFileHeader);
+    }
+    else
+    {
+        offset = state->cur_block.offset \
+            + StorageBlockHeaderSize \
+            + state->cur_block.compressed_size;
+    }
+
+    return read_block(state, offset);
+}
+
 static void
 load_last_block(StorageState *state)
 {
-    Size    bytes;
-
     /* read the last block */
-    storage_seek(state, state->file_header.last_block_offset);
-    bytes = fread(state->cur_block.data, 1, BLOCK_SIZE, state->file);
-    if (bytes == BLOCK_SIZE)
+    if (read_block(state, state->file_header.last_block_offset) == true)
     {
         state->cur_block.offset = state->file_header.last_block_offset;
         state->cur_block.status = BS_LOADED;
@@ -123,6 +181,10 @@ find_last_tuple_offset(StorageState *state)
 static void
 flush_last_block(StorageState *state)
 {
+    Size    estimated_size;
+    Size    compressed_size;
+    StorageBlockHeader *block_header;
+
     Assert(!BlockIsInvalid(state->cur_block));
 
     if (state->cur_block.status == BS_LOADED)
@@ -131,8 +193,24 @@ flush_last_block(StorageState *state)
         return;
     }
 
+    /* compress */
+    estimated_size = LZ4_compressBound(BLOCK_SIZE);
+    block_header = \
+        (StorageBlockHeader *) palloc0(StorageBlockHeaderSize + estimated_size);
+    compressed_size = LZ4_compress_fast(state->cur_block.data,
+                                        block_header->data,
+                                        BLOCK_SIZE,
+                                        estimated_size,
+                                        1); /* TODO: configurable? */
+    if (compressed_size == 0)
+        elog(ERROR, "tuple_fdw: compression failed");
+    block_header->compressed_size = compressed_size;
+
+    /* write out to disk */
     storage_seek(state, state->cur_block.offset);
-    storage_write(state, state->cur_block.data, BLOCK_SIZE);
+    storage_write(state, block_header, StorageBlockHeaderSize + compressed_size);
+
+    state->cur_block.compressed_size = compressed_size;
 
     /* if new block is being flushed overwrite the file header */
     if (state->cur_block.status == BS_NEW)
@@ -141,6 +219,8 @@ flush_last_block(StorageState *state)
         write_storage_file_header(state);
         state->cur_block.status = BS_LOADED;
     }
+
+    pfree(block_header);
 }
 
 static void
@@ -149,7 +229,11 @@ allocate_new_block(StorageState *state)
     Block *block = &state->cur_block;
 
     if (block->offset != 0)
-        block->offset = state->cur_block.offset + BLOCK_SIZE;
+    {
+        block->offset = state->cur_block.offset \
+                        + StorageBlockHeaderSize \
+                        + block->compressed_size;
+    }
     else
     {
         /*
@@ -209,35 +293,6 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
     /* advance the current offset */
     state->cur_offset += tuple_length;
 }
-
-static bool
-load_next_block(StorageState *state)
-{
-    Size    offset;
-    Size    bytes;
-
-    if (BlockIsInvalid(state->cur_block))
-    {
-        /* we're about to read the first block in the file */
-        offset = sizeof(StorageFileHeader);
-    }
-    else
-        offset = state->cur_block.offset + BLOCK_SIZE;
-
-    /* read the block */
-    storage_seek(state, offset);
-    bytes = fread(state->cur_block.data, 1, BLOCK_SIZE, state->file);
-    if (bytes == BLOCK_SIZE)
-    {
-        state->cur_block.offset = offset;
-        state->cur_block.status = BS_LOADED;
-        state->cur_offset = 0;
-        return true;
-    }
-    else
-        return false;
-}
-
 
 HeapTuple
 StorageReadTuple(StorageState *state)

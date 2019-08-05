@@ -2,7 +2,7 @@ MODULE_big = tuple_fdw
 OBJS = storage.o tuple_fdw.o 
 PGFILEDESC = "tuple_fdw - foreign data wrapper for tuple"
 
-SHLIB_LINK = #-lm
+SHLIB_LINK = -llz4
 
 EXTENSION = tuple_fdw
 DATA = tuple_fdw--0.1.sql

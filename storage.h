@@ -16,28 +16,44 @@ typedef enum
 
 #define BlockIsInvalid(block) ((block).status == BS_INVALID)
 
-typedef struct
-{
-    Size last_block_offset;
-    /* TODO: maybe add a CRC signature as we have 4 bytes for padding anyway */
-} StorageFileHeader;
 
 typedef struct
 {
-    Size length;
-    char data[];
+    Size    last_block_offset;
+    /* TODO: compression type */
+    /* TODO: block size & version */
+} StorageFileHeader;
+
+
+typedef struct
+{
+    Size    compressed_size;
+    /* TODO: maybe add a CRC signature as we have 4 bytes for padding anyway */
+    char    data[];     /* compressed block data */
+} StorageBlockHeader;
+
+#define StorageBlockHeaderSize offsetof(StorageBlockHeader, data)
+
+
+typedef struct
+{
+    Size    length;
+    char    data[];     /* tuple body */
 } StorageTupleHeader;
 
 #define StorageTupleHeaderSize offsetof(StorageTupleHeader, data)
 #define GetCurrentTuple(state) \
     (StorageTupleHeader *) ((state)->cur_block.data + (state)->cur_offset)
 
+
 typedef struct
 {
     BlockStatus status;
     Size        offset;
+    Size        compressed_size;
     char        data[BLOCK_SIZE];
 } Block;
+
 
 typedef struct
 {
@@ -47,6 +63,7 @@ typedef struct
     Block       cur_block;
     Size        cur_offset;    /* offset within the last_block */
 } StorageState;
+
 
 void StorageInit(StorageState *state, const char *filename);
 void StorageInsertTuple(StorageState *state, HeapTuple tuple);
