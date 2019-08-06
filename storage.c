@@ -75,9 +75,12 @@ read_storage_file_header(StorageState *state)
 
     if (bytes == 0)
     {   
-        /* brand new file, need to write file header first */
+        /* it's a brand new file, initialize new header */
         state->file_header.last_block_offset = sizeof(StorageFileHeader);
-        write_storage_file_header(state);
+
+        /* write it to the disk if possible*/
+        if (!state->readonly)
+            write_storage_file_header(state);
     }
 }
 
@@ -270,9 +273,12 @@ allocate_new_block(StorageState *state)
 }
 
 void
-StorageInit(StorageState *state, const char *filename)
+StorageInit(StorageState *state, const char *filename, bool readonly)
 {
-    if ((state->file = AllocateFile(filename, "r+")) == NULL)
+    const char *mode = readonly ? "r" : "r+";
+
+    state->readonly = readonly;
+    if ((state->file = AllocateFile(filename, mode)) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);

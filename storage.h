@@ -60,13 +60,14 @@ typedef struct
 {
     /* TODO: add exclusive write lock */
     FILE       *file;
+    bool        readonly;
     StorageFileHeader    file_header;
     Block       cur_block;
     Size        cur_offset;    /* offset within the last_block */
 } StorageState;
 
 
-void StorageInit(StorageState *state, const char *filename);
+void StorageInit(StorageState *state, const char *filename, bool readonly);
 void StorageInsertTuple(StorageState *state, HeapTuple tuple);
 HeapTuple StorageReadTuple(StorageState *state);
 void StorageRelease(StorageState *state);

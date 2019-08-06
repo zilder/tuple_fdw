@@ -221,7 +221,7 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     filename = strVal(linitial(fdw_private));
 
     /* open file */
-    StorageInit(state, filename);
+    StorageInit(state, filename, true);
 
     node->fdw_state = state;
 }
@@ -276,7 +276,7 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
     StorageState *state = palloc0(sizeof(StorageState));
     char *filename = strVal(linitial(fdw_private));
 
-    StorageInit(state, filename);
+    StorageInit(state, filename, false);
 	resultRelInfo->ri_FdwState = state;
 }
 
