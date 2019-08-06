@@ -119,6 +119,16 @@ read_block(StorageState* state, Size offset)
     bytes = fread(compressed_data, 1, block_header.compressed_size, state->file);
     if (bytes == block_header.compressed_size)
     {
+        pg_crc32c   crc;
+
+        /* calculate checksum and compare it to a stored one */
+        INIT_CRC32C(crc);
+        COMP_CRC32C(crc, compressed_data, block_header.compressed_size);
+        FIN_CRC32C(crc);
+
+        if (!EQ_CRC32C(crc, block_header.checksum))
+            elog(ERROR, "tuple_fdw: wrong checksum");
+
         decompress_block(state, compressed_data, block_header.compressed_size);
 
         state->cur_block.offset = offset;
@@ -194,6 +204,7 @@ compress_current_block(StorageState *state)
     Size    estimate;
     Size    size;
     StorageBlockHeader *block_header;
+    pg_crc32c   crc;
 
     estimate = LZ4_compressBound(BLOCK_SIZE);
     block_header = (StorageBlockHeader *) \
@@ -207,6 +218,12 @@ compress_current_block(StorageState *state)
     if (size == 0)
         elog(ERROR, "tuple_fdw: compression failed");
     block_header->compressed_size = size;
+
+    /* calculate checksum */
+    INIT_CRC32C(crc);
+    COMP_CRC32C(crc, block_header->data, size);
+    FIN_CRC32C(crc);
+    block_header->checksum = crc;
 
     return block_header;
 }

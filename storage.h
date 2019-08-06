@@ -2,6 +2,7 @@
 #define TUPLE_STORAGE_H
 
 #include "access/htup.h"
+#include "port/pg_crc32c.h"
 
 
 #define BLOCK_SIZE 1024 * 1024  /* 1 megabyte */
@@ -27,10 +28,10 @@ typedef struct
 
 typedef struct
 {
-    Size    compressed_size;
+    Size        compressed_size;
+    pg_crc32c   checksum;
     /* TODO: store the last tuple offset */
-    /* TODO: maybe add a CRC signature as we have 4 bytes for padding anyway */
-    char    data[];     /* compressed block data */
+    char        data[];     /* compressed block data */
 } StorageBlockHeader;
 
 #define StorageBlockHeaderSize offsetof(StorageBlockHeader, data)
