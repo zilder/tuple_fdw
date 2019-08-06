@@ -28,6 +28,7 @@ typedef struct
 typedef struct
 {
     Size    compressed_size;
+    /* TODO: store the last tuple offset */
     /* TODO: maybe add a CRC signature as we have 4 bytes for padding anyway */
     char    data[];     /* compressed block data */
 } StorageBlockHeader;

@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "postgres.h"
 
@@ -11,6 +12,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "parser/parsetree.h"
+#include "storage/fd.h"
 #include "utils/elog.h"
 
 #include "storage.h"
@@ -102,16 +104,21 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
 
         if (strcmp(def->defname, "filename") == 0)
         {
-            struct stat stat_buf;
             const char *filename = defGetString(def);
 
-            if (stat(filename, &stat_buf) != 0)
+            if (access(filename, F_OK) == -1)
             {
-                const char *err = strerror(errno);
+                FILE   *fd;
 
-                ereport(ERROR,
-                        (errmsg(ELOG_PREFIX "cannot get file status for '%s': %s",
-                                filename, err)));
+                elog(WARNING,
+                     ELOG_PREFIX "file '%s' does not exist; it will be created automatically",
+                     filename);
+
+                /* file does not exist, create one */
+                if ((fd = AllocateFile(filename, "ab+")) == NULL)
+                    elog(ERROR, "cannot open file '%s'", filename);
+
+                FreeFile(fd);
             }
             filename_provided = true;
         }
@@ -214,13 +221,6 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     filename = strVal(linitial(fdw_private));
 
     /* open file */
-#if 0
-    if ((tstate->file = AllocateFile(filename, PG_BINARY_R)) == NULL)
-    {
-        const char *err = strerror(errno);
-        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
-    }
-#endif
     StorageInit(state, filename);
 
     node->fdw_state = state;
@@ -235,7 +235,7 @@ tupleIterateForeignScan(ForeignScanState *node)
 
 	ExecClearTuple(slot);
 
-    if ((tuple =StorageReadTuple(state)) == NULL)
+    if ((tuple = StorageReadTuple(state)) == NULL)
         return slot;
 
 #if PG_VERSION_NUM < 120000
@@ -276,16 +276,7 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
     StorageState *state = palloc0(sizeof(StorageState));
     char *filename = strVal(linitial(fdw_private));
 
-#if 0
-    /* open file */
-    if ((tstate->file = AllocateFile(filename, PG_BINARY_A)) == NULL)
-    {
-        const char *err = strerror(errno);
-        elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
-    }
-#endif
     StorageInit(state, filename);
-
 	resultRelInfo->ri_FdwState = state;
 }
 
@@ -305,15 +296,6 @@ tupleExecForeignInsert(EState *estate,
 	tuple = ExecCopySlotHeapTuple(slot);
 #endif
 
-    /* TODO */
-#if 0
-    buf = palloc0(8 + tuple->t_len);
-    memcpy(buf, (char *) &tuple->t_len, 4);
-    memcpy(buf + 8, (char *) tuple->t_data, tuple->t_len);
-
-    fwrite(buf, 1, tuple->t_len + 8, tstate->file);
-    pfree(buf);
-#endif
     StorageInsertTuple(state, tuple);
 
     return rslot;
