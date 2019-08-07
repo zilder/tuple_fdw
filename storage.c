@@ -5,6 +5,8 @@
 #include "storage.h"
 
 #include <stdio.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 
 /*
@@ -45,17 +47,6 @@ storage_write(StorageState *state, const void *ptr, Size size)
     }
 }
 
-static inline void
-storage_read(StorageState *state, const void *ptr, Size size)
-{
-    if (fread((char *) ptr, 1, size, state->file) != size)
-    {
-        const char *err = strerror(errno);
-
-        elog(ERROR, "read failed: %s", err);
-    }
-}
-
 /* Storage file manipulations */
 
 static void
@@ -70,17 +61,25 @@ read_storage_file_header(StorageState *state)
 {
     Size bytes;
 
-    storage_seek(state, 0);
-    bytes = fread(&state->file_header, 1, sizeof(StorageFileHeader), state->file);
+    if (state->mmaped_file)
+    {
+        Assert(state->readonly);
+        memcpy(&state->file_header, state->mmaped_file, sizeof(StorageFileHeader));
+    }
+    else
+    {
+        storage_seek(state, 0);
+        bytes = fread(&state->file_header, 1, sizeof(StorageFileHeader), state->file);
 
-    if (bytes == 0)
-    {   
-        /* it's a brand new file, initialize new header */
-        state->file_header.last_block_offset = sizeof(StorageFileHeader);
+        if (bytes == 0)
+        {   
+            /* it's a brand new file, initialize new header */
+            state->file_header.last_block_offset = sizeof(StorageFileHeader);
 
-        /* write it to the disk if possible*/
-        if (!state->readonly)
-            write_storage_file_header(state);
+            /* write it to the disk if possible*/
+            if (!state->readonly)
+                write_storage_file_header(state);
+        }
     }
 }
 
@@ -102,44 +101,55 @@ decompress_block(StorageState *state, char *compressed_data, Size len)
 static bool
 read_block(StorageState* state, Size offset)
 {
-    StorageBlockHeader block_header;
-    char   *compressed_data;
-    Size    bytes;
+    StorageBlockHeader *block_header;
+    StorageBlockHeader  b;
+    char       *compressed_data;
+    Size        bytes;
+    pg_crc32c   crc;
 
-    /* read the block */
-    storage_seek(state, offset);
-
-    bytes = fread(&block_header, 1, StorageBlockHeaderSize, state->file);
-    if (bytes != StorageBlockHeaderSize)
-        return false;
-
-    Assert(block_header.compressed_size > 0);
-
-    compressed_data = palloc(block_header.compressed_size);
-    bytes = fread(compressed_data, 1, block_header.compressed_size, state->file);
-    if (bytes == block_header.compressed_size)
+    if (state->mmaped_file)
     {
-        pg_crc32c   crc;
+        if (offset >= state->mmaped_size)
+            return false;
 
-        /* calculate checksum and compare it to a stored one */
-        INIT_CRC32C(crc);
-        COMP_CRC32C(crc, compressed_data, block_header.compressed_size);
-        FIN_CRC32C(crc);
-
-        if (!EQ_CRC32C(crc, block_header.checksum))
-            elog(ERROR, "tuple_fdw: wrong checksum");
-
-        decompress_block(state, compressed_data, block_header.compressed_size);
-
-        state->cur_block.offset = offset;
-        state->cur_block.status = BS_LOADED;
-        state->cur_block.compressed_size = block_header.compressed_size;
-        state->cur_offset = 0;
-        return true;
+        block_header = (StorageBlockHeader *) (state->mmaped_file + offset);
+        compressed_data = block_header->data;
     }
     else
-        return false;
+    {
+        /* read the block */
+        storage_seek(state, offset);
 
+        bytes = fread(&b, 1, StorageBlockHeaderSize, state->file);
+        if (bytes != StorageBlockHeaderSize)
+            return false;
+
+        Assert(b.compressed_size > 0);
+
+        compressed_data = palloc(b.compressed_size);
+        bytes = fread(compressed_data, 1, b.compressed_size, state->file);
+        if (bytes != b.compressed_size)
+            return false;
+
+        block_header = &b;
+    }
+
+    /* calculate checksum and compare it to a stored one */
+    INIT_CRC32C(crc);
+    COMP_CRC32C(crc, compressed_data, block_header->compressed_size);
+    FIN_CRC32C(crc);
+
+    if (!EQ_CRC32C(crc, block_header->checksum))
+        elog(ERROR, "tuple_fdw: wrong checksum");
+
+    decompress_block(state, compressed_data, block_header->compressed_size);
+
+    state->cur_block.offset = offset;
+    state->cur_block.status = BS_LOADED;
+    state->cur_block.compressed_size = block_header->compressed_size;
+    state->cur_offset = 0;
+
+    return true;
 }
 
 static bool
@@ -289,17 +299,48 @@ allocate_new_block(StorageState *state)
     state->cur_offset = 0;
 }
 
+static void
+mmap_file(StorageState *state)
+{
+    struct stat buf;
+    int         fd = fileno(state->file);
+    
+    if (fstat(fd, &buf) != 0)
+    {
+        const char *err = strerror(errno);
+
+        elog(ERROR, "tuple_fdw: cannot get file status: %s", err);
+    }
+
+    state->mmaped_file = mmap(NULL, buf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (state->mmaped_file == MAP_FAILED)
+    {
+        const char *err = strerror(errno);
+
+        elog(ERROR, "tuple_fdw: mmap failed: %s", err);
+    }
+    state->mmaped_size = buf.st_size;
+}
+
 void
-StorageInit(StorageState *state, const char *filename, bool readonly)
+StorageInit(StorageState *state,
+            const char *filename,
+            bool readonly,
+            bool use_mmap)
 {
     const char *mode = readonly ? "r" : "r+";
 
+    /*TODO: assert that use_mmap isn't used in non-readonly queries */
     state->readonly = readonly;
     if ((state->file = AllocateFile(filename, mode)) == NULL)
     {
         const char *err = strerror(errno);
         elog(ERROR, "tuple_fdw: cannot open file '%s': %s", filename, err);
     }
+
+    if (use_mmap)
+        mmap_file(state);
+
     read_storage_file_header(state);
 }
 
@@ -373,6 +414,16 @@ StorageRelease(StorageState *state)
     /* flush pending block */
     if (status == BS_NEW || status == BS_MODIFIED)
         flush_last_block(state);
+
+    if (state->mmaped_file)
+    {
+        if (munmap(state->mmaped_file, state->mmaped_size) == -1)
+        {
+            const char *err = strerror(errno);
+
+            elog(ERROR, "tuple_fdw: munmap failed: %s", err);
+        }
+    }
 
     FreeFile(state->file);
 }

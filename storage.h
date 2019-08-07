@@ -61,6 +61,8 @@ typedef struct
 {
     /* TODO: add exclusive write lock */
     FILE       *file;
+    char       *mmaped_file;    /* address of mmaped segment */
+    Size        mmaped_size;    /* size of mmaped segment */
     bool        readonly;
     StorageFileHeader    file_header;
     Block       cur_block;
@@ -68,7 +70,10 @@ typedef struct
 } StorageState;
 
 
-void StorageInit(StorageState *state, const char *filename, bool readonly);
+void StorageInit(StorageState *state,
+            const char *filename,
+            bool readonly,
+            bool use_mmap);
 void StorageInsertTuple(StorageState *state, HeapTuple tuple);
 HeapTuple StorageReadTuple(StorageState *state);
 void StorageRelease(StorageState *state);
