@@ -23,6 +23,13 @@ PG_MODULE_MAGIC;
 #define ELOG_PREFIX "tuple_fdw: "
 
 
+struct fdw_options
+{
+    char   *filename;
+    bool    use_mmap;
+};
+
+
 void _PG_init(void);
 
 /* FDW routines */
@@ -122,6 +129,10 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
             }
             filename_provided = true;
         }
+        else if (strcmp(def->defname, "use_mmap") == 0)
+        {
+            /* nothing to check here */
+        }
         else
         {
             ereport(ERROR,
@@ -163,11 +174,10 @@ tupleGetForeignPaths(PlannerInfo *root,
                                      NULL));
 }
 
-static List *
-extract_table_options(Oid relid)
+static void
+extract_table_options(Oid relid, struct fdw_options *options)
 {
 	ForeignTable   *table;
-    List           *fdw_private = NIL;
     ListCell       *lc;
 
     table = GetForeignTable(relid);
@@ -177,10 +187,25 @@ extract_table_options(Oid relid)
 		DefElem    *def = (DefElem *) lfirst(lc);
 
         if (strcmp(def->defname, "filename") == 0)
-            fdw_private = lappend(fdw_private, def->arg);
+        {
+            options->filename = defGetString(def);
+        }
+        else if (strcmp(def->defname, "use_mmap") == 0)
+        {
+            elog(NOTICE, "use_mmap = %d", options->use_mmap);
+        }
     }
+}
 
-    return fdw_private;
+static List *
+fdw_options_to_list(struct fdw_options *o)
+{
+    List *lst = NIL;
+
+    lst = lappend(lst, makeString(o->filename));
+    lst = lappend(lst, makeInteger(o->use_mmap));
+
+    return lst;
 }
 
 static ForeignScan *
@@ -192,9 +217,11 @@ tupleGetForeignPlan(PlannerInfo *root,
                       List *scan_clauses,
                       Plan *outer_plan)
 {
-    List       *fdw_private;
+    List               *fdw_private = NIL;
+    struct fdw_options  options = {NULL, false};
 
-    fdw_private = extract_table_options(foreigntableid);
+    extract_table_options(foreigntableid, &options);
+    fdw_private = fdw_options_to_list(&options);
 
 	/* Create the ForeignScan node */
 	return make_foreignscan(tlist,
@@ -214,15 +241,17 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
 	ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;
     List           *fdw_private = plan->fdw_private;
     char           *filename;
+    bool            use_mmap;
 
     state = palloc0(sizeof(StorageState));
 
-    Assert(list_length(fdw_private) == 1);
+    Assert(list_length(fdw_private) == 2);
     filename = strVal(linitial(fdw_private));
+    use_mmap = intVal(lsecond(fdw_private));
 
     /* open file */
     /* TODO: optional use_mmap */
-    StorageInit(state, filename, true, true);
+    StorageInit(state, filename, true, use_mmap);
 
     node->fdw_state = state;
 }
@@ -262,9 +291,11 @@ tuplePlanForeignModify(PlannerInfo *root,
                        Index resultRelation,
                        int subplan_index)
 {
-	RangeTblEntry *rte = planner_rt_fetch(resultRelation, root);
+    struct fdw_options  options;
+	RangeTblEntry      *rte = planner_rt_fetch(resultRelation, root);
 
-    return extract_table_options(rte->relid);
+    extract_table_options(rte->relid, &options);
+    return fdw_options_to_list(&options);
 }
 
 static void
