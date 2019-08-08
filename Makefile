@@ -9,15 +9,14 @@ DATA = tuple_fdw--0.1.sql
 
 REGRESS = tuple_fdw
 
-EXTRA_CLEAN = sql/tuple_fdw.sql expected/tuple_fdw.out
+REGRESSION_DATA = sql/example.bin
+EXTRA_CLEAN = sql/tuple_fdw.sql expected/tuple_fdw.out $(REGRESSION_DATA)
 
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-#tuple.bc:
-#	$(COMPILE.cxx.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ tuple_impl.cpp
+installcheck: cleandata
 
-#tuple.o:
-#	$(CXX) -std=c++11 -O3 $(CPPFLAGS) $(CCFLAGS) tuple_impl.cpp $(PG_LIBS) -c -fPIC $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
-
+cleandata:
+	rm -f $(REGRESSION_DATA)

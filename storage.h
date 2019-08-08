@@ -28,7 +28,7 @@ typedef struct
 
 typedef struct
 {
-    Size        compressed_size;
+    int32_t     compressed_size;
     pg_crc32c   checksum;
     /* TODO: store the last tuple offset */
     char        data[];     /* compressed block data */

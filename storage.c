@@ -349,7 +349,7 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
 {
     StorageTupleHeader st_header;
     char *buf;
-    Size tuple_length = tuple->t_len + StorageTupleHeaderSize;
+    Size tuple_length = MAXALIGN(tuple->t_len + StorageTupleHeaderSize);
 
     if (BlockIsInvalid(state->cur_block))
     {
@@ -366,7 +366,7 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
     }
 
     /* write tuple length and the tuple itself to the block */
-    st_header.length = tuple->t_len;
+    st_header.length = MAXALIGN(tuple->t_len);
     buf = state->cur_block.data + state->cur_offset;
     memcpy(buf, &st_header, StorageTupleHeaderSize);
     memcpy(buf + StorageTupleHeaderSize, tuple->t_data, tuple->t_len);

@@ -1,0 +1,27 @@
+CREATE EXTENSION tuple_fdw;
+DROP ROLE IF EXISTS tuple_fdw_user;
+CREATE ROLE tuple_fdw_user LOGIN SUPERUSER;
+CREATE SERVER tuple_srv FOREIGN DATA WRAPPER tuple_fdw;
+CREATE USER MAPPING FOR tuple_fdw_user SERVER tuple_srv;
+SET ROLE tuple_fdw_user;
+CREATE FOREIGN TABLE example (
+    id      SERIAL,
+    msg     TEXT
+)
+SERVER tuple_srv
+OPTIONS (filename '@abs_srcdir@/sql/example.bin');
+WARNING:  tuple_fdw: file '@abs_srcdir@/sql/example.bin' does not exist; it will be created automatically
+SELECT * FROM example;
+ id | msg 
+----+-----
+(0 rows)
+
+INSERT INTO example VALUES (1, 'ein'), (2, 'zwei'), (3, 'drei');
+SELECT * FROM example;
+ id | msg  
+----+------
+  1 | ein
+  2 | zwei
+  3 | drei
+(3 rows)
+

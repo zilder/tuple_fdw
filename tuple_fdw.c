@@ -192,7 +192,7 @@ extract_table_options(Oid relid, struct fdw_options *options)
         }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
-            elog(NOTICE, "use_mmap = %d", options->use_mmap);
+            options->use_mmap = defGetBoolean(def);
         }
     }
 }
