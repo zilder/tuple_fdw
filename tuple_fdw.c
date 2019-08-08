@@ -9,11 +9,15 @@
 #include "commands/defrem.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
+#include "nodes/makefuncs.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "storage/fd.h"
 #include "utils/elog.h"
+#include "utils/lsyscache.h"
 
 #include "storage.h"
 
@@ -26,6 +30,7 @@ PG_MODULE_MAGIC;
 struct fdw_options
 {
     char   *filename;
+    List   *attrs_sorted;
     bool    use_mmap;
 };
 
@@ -129,6 +134,10 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
             }
             filename_provided = true;
         }
+        else if (strcmp(def->defname, "sorted") == 0)
+        {
+            /* nothing to check here */
+        }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
             /* nothing to check here */
@@ -147,31 +156,23 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
-static void
-tupleGetForeignRelSize(PlannerInfo *root,
-                       RelOptInfo *baserel,
-                       Oid foreigntableid)
+static List *
+parse_attributes_list(char *start, Oid relid)
 {
-}
+    List       *attrs = NIL;
+    char       *token;
+    const char *delim = " ";
+    AttrNumber  attnum;
 
-static void
-tupleGetForeignPaths(PlannerInfo *root,
-					RelOptInfo *baserel,
-					Oid foreigntableid)
-{
-    double startup_cost = 0;
-    double total_cost = 100;
+    while ((token = strtok(start, delim)) != NULL)
+    {
+        if ((attnum = get_attnum(relid, token)) == InvalidAttrNumber)
+            elog(ERROR, ELOG_PREFIX "invalid attribute name '%s'", token);
+        attrs = lappend_int(attrs, attnum);
+        start = NULL;
+    }
 
-	add_path(baserel, (Path *)
-			 create_foreignscan_path(root, baserel,
-                                     NULL,	/* default pathtarget */
-                                     baserel->rows,
-                                     startup_cost,
-                                     total_cost,
-                                     NULL,  /* no info on sorting */
-                                     NULL,	/* no outer rel either */
-                                     NULL,	/* no extra plan */
-                                     NULL));
+    return attrs;
 }
 
 static void
@@ -190,6 +191,11 @@ extract_table_options(Oid relid, struct fdw_options *options)
         {
             options->filename = defGetString(def);
         }
+        else if (strcmp(def->defname, "sorted") == 0)
+        {
+            options->attrs_sorted =
+                parse_attributes_list(defGetString(def), relid);
+        }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
             options->use_mmap = defGetBoolean(def);
@@ -204,8 +210,75 @@ fdw_options_to_list(struct fdw_options *o)
 
     lst = lappend(lst, makeString(o->filename));
     lst = lappend(lst, makeInteger(o->use_mmap));
+    /* 
+     * We don't pass `attrs_sorted` further to the executer as it is only used
+     * in the planner
+     */
 
     return lst;
+}
+
+static void
+tupleGetForeignRelSize(PlannerInfo *root,
+                       RelOptInfo *baserel,
+                       Oid foreigntableid)
+{
+    struct fdw_options *options;
+
+    options = palloc0(sizeof(struct fdw_options));
+    extract_table_options(foreigntableid, options);
+
+    baserel->fdw_private = options;
+}
+
+static void
+tupleGetForeignPaths(PlannerInfo *root,
+					RelOptInfo *baserel,
+					Oid foreigntableid)
+{
+    double  startup_cost = 0;
+    double  total_cost = 100;
+    List   *pathkeys = NIL;
+    ListCell *lc;
+    struct fdw_options *options = (struct fdw_options *) baserel->fdw_private;
+
+    foreach (lc, options->attrs_sorted)
+    {
+        AttrNumber  attnum = lfirst_int(lc);
+        Oid         relid = root->simple_rte_array[baserel->relid]->relid;
+        Oid         typid,
+                    collid;
+        int32       typmod;
+        Oid         sort_op;
+        Var        *var;
+        List       *attr_pathkey;
+
+        /* Build an expression (simple var) */
+        get_atttypetypmodcoll(relid, attnum, &typid, &typmod, &collid);
+        var = makeVar(baserel->relid, attnum, typid, typmod, collid, 0);
+
+        /* Lookup sorting operator for the attribute type */
+        get_sort_group_operators(typid,
+                                 true, false, false,
+                                 &sort_op, NULL, NULL,
+                                 NULL);
+
+        attr_pathkey = build_expression_pathkey(root, (Expr *) var, NULL,
+                                                sort_op, baserel->relids,
+                                                true);
+        pathkeys = list_concat(pathkeys, attr_pathkey);
+    }
+
+	add_path(baserel, (Path *)
+			 create_foreignscan_path(root, baserel,
+                                     NULL,	/* default pathtarget */
+                                     baserel->rows,
+                                     startup_cost,
+                                     total_cost,
+                                     pathkeys,  /* no info on sorting */
+                                     NULL,	/* no outer rel either */
+                                     NULL,	/* no extra plan */
+                                     NULL));
 }
 
 static ForeignScan *
@@ -218,10 +291,8 @@ tupleGetForeignPlan(PlannerInfo *root,
                       Plan *outer_plan)
 {
     List               *fdw_private = NIL;
-    struct fdw_options  options = {NULL, false};
 
-    extract_table_options(foreigntableid, &options);
-    fdw_private = fdw_options_to_list(&options);
+    fdw_private = fdw_options_to_list((struct fdw_options *) baserel->fdw_private);
 
 	/* Create the ForeignScan node */
 	return make_foreignscan(tlist,
