@@ -14,12 +14,32 @@
  * -----------------
  *
  * Storage file consists of header and a set of data blocks each of which
- * contains tuples. Data block starts with a 8 byte integer value signifying
- * the compressed block data size. Compressed data consists of (length, tuple)
- * pairs.
+ * contains tuples. Data block starts with a header containing compressed block
+ * data size and checksum. Compressed data consists of tuples, each contains
+ * a header and tuple itself (memcpy of HeapTupleHeaderData and tuple body).
  *
  * Storage header currently contains only the last block offset to speedup
  * inserts.
+ *
+ * The storage file layout can be visualized as follows:
+ *
+ * ┌──────────────────────────────────────────────┐
+ * │ StorageFileHeader                            │   ─ 8 bytes
+ * ├──────────────────────────────────────────────┤
+ * │ StorageBlockHeader                           │   ─ 8 bytes
+ * ├────────────────────┬─────────────────────────┤
+ * │ StorageTupleHeader │ tuple body              │  ┐
+ * ├──────────┬─────────┴──────────┬──────────────┤  │
+ * │          │ StorageTupleHeader │ tuple body   │  │
+ * ├──────────┴────────────┬───────┴──────────────┤  │
+ * │                       │ StorageTupleHeader   │  │  Compressed data
+ * ├───────────────────────┴──────────┬───────────┤  ├─ representing a 1 Mb
+ * │ tuple body                       │░░░░░░░░░░░│  │  uncompressed block
+ * ├──────────────────────────────────┘░░░░░░░░░░░│  │
+ * │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│  │
+ * │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│  │
+ * │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│  ┘
+ * └──────────────────────────────────────────────┘
  *
  */
 
