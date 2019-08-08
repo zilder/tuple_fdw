@@ -86,7 +86,7 @@ read_storage_file_header(StorageState *state)
 static void
 decompress_block(StorageState *state, char *compressed_data, Size len)
 {
-    Size size;
+    int size;
 
     size = LZ4_decompress_safe(compressed_data,
                                state->cur_block.data,
