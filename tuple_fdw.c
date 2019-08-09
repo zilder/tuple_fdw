@@ -16,6 +16,7 @@
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "storage/fd.h"
+#include "storage/lmgr.h"
 #include "utils/elog.h"
 #include "utils/lsyscache.h"
 
@@ -317,7 +318,7 @@ static void
 tupleBeginForeignScan(ForeignScanState *node, int eflags)
 {
     StorageState   *state;
-	ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;
+    ForeignScan    *plan = (ForeignScan *) node->ss.ps.plan;
     List           *fdw_private = plan->fdw_private;
     char           *filename;
     bool            use_mmap;
@@ -395,8 +396,16 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
                         int subplan_index,
                         int eflags)
 {
-    StorageState *state = palloc0(sizeof(StorageState));
-    char *filename = strVal(linitial(fdw_private));
+    Relation        rel = resultRelInfo->ri_RelationDesc;
+    StorageState   *state = palloc0(sizeof(StorageState));
+    char           *filename = strVal(linitial(fdw_private));
+
+    /*
+     * Prevent relation from being modified concurrently or being modified and
+     * read at the same time. The storage itself doesn't have any internal
+     * mechanisms to resolve concurrent access.
+     */
+    LockRelation(rel, AccessExclusiveLock);
 
     StorageInit(state, filename, false, false);
 	resultRelInfo->ri_FdwState = state;

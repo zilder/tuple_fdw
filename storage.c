@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 
 /*
@@ -289,6 +290,7 @@ flush_last_block(StorageState *state)
         write_storage_file_header(state);
         state->cur_block.status = BS_LOADED;
     }
+    fsync(fileno(state->file));
 
     pfree(block_header);
 }

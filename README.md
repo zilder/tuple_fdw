@@ -1,6 +1,10 @@
 # tuple_fdw
 
-A very simple foreign data wrapper to write/read postgres tuples to/from binary file. Unlike postgres heap storage this is just a plain sequence of tuples. `tuple_fdw` writes (and reads) directly to the file avoiding postgres buffer cache. It isn't affected by autovacuum. The storage is append only.
+A very simple foreign data wrapper to write/read postgres tuples to/from binary file. The data stored in a file is organized as blocks, each block is compressed using `lz4`. `tuple_fdw` writes (and reads) directly to the file avoiding postgres buffer cache. It isn't affected by autovacuum. The storage is append only.
+
+Because of the nature of the storage it doesn't support concurrent writes or mixture of concurrent reads and writes. Also it's not well suited for single row insertions as it has to decompress and compress the last data block to perform insertion. The storage is best suited as a cold data storage.
+
+Some visualization of the internals of the storage can be found in `storage.c`.
 
 ## Build
 
@@ -18,7 +22,12 @@ make install PG_CONFIG=/path/to/pg_config
 
 ## Using
 
-The only configurable parameter is the `filename` table option which specifies the storage file. `tuple_fdw` doesn't automatically create file if it doesn't exist, so please create it manually.
+
+When creating foreign table using `tuple_fdw` the following parameter are avaliable:
+
+* `filename`: path to the storage file; if file doesn't exist it will be created automatically;
+* `use_mmap`: use `mmap` for reading data rather than `fread`; in heavy concurrent read workload it might be more efficient to use mmap;
+* `sorted` specifies columns by which the dataset is ordered; it may help building more efficient execution plans which imply ordering. 
 
 ## Example
 

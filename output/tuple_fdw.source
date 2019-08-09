@@ -16,11 +16,11 @@ SELECT * FROM example;
 ----+-----
 (0 rows)
 
-INSERT INTO example VALUES (1, 'ein'), (2, 'zwei'), (3, 'drei');
+INSERT INTO example VALUES (1, 'eins'), (2, 'zwei'), (3, 'drei');
 SELECT * FROM example;
  id | msg  
 ----+------
-  1 | ein
+  1 | eins
   2 | zwei
   3 | drei
 (3 rows)

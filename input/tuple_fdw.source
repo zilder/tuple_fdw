@@ -15,5 +15,5 @@ SERVER tuple_srv
 OPTIONS (filename '@abs_srcdir@/sql/example.bin');
 
 SELECT * FROM example;
-INSERT INTO example VALUES (1, 'ein'), (2, 'zwei'), (3, 'drei');
+INSERT INTO example VALUES (1, 'eins'), (2, 'zwei'), (3, 'drei');
 SELECT * FROM example;
