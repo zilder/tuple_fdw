@@ -17,6 +17,7 @@
 #include "parser/parsetree.h"
 #include "storage/fd.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
 #include "utils/elog.h"
 #include "utils/lsyscache.h"
 
@@ -33,6 +34,7 @@ struct fdw_options
     char   *filename;
     List   *attrs_sorted;
     bool    use_mmap;
+    int     lz4_acceleration;
 };
 
 
@@ -98,6 +100,25 @@ tuple_fdw_handler(PG_FUNCTION_ARGS)
     PG_RETURN_POINTER(routine);
 }
 
+static List *
+parse_attributes_list(char *start, Oid relid)
+{
+    List       *attrs = NIL;
+    char       *token;
+    const char *delim = " ";
+    AttrNumber  attnum;
+
+    while ((token = strtok(start, delim)) != NULL)
+    {
+        if ((attnum = get_attnum(relid, token)) == InvalidAttrNumber)
+            elog(ERROR, ELOG_PREFIX "invalid attribute name '%s'", token);
+        attrs = lappend_int(attrs, attnum);
+        start = NULL;
+    }
+
+    return attrs;
+}
+
 PG_FUNCTION_INFO_V1(tuple_fdw_validator);
 Datum
 tuple_fdw_validator(PG_FUNCTION_ARGS)
@@ -137,11 +158,19 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
         }
         else if (strcmp(def->defname, "sorted") == 0)
         {
-            /* nothing to check here */
+            /* 
+             * TODO: we can't check that those are actual column names. But
+             * at least we could verify that this is a correct space separated
+             * list
+             */
         }
         else if (strcmp(def->defname, "use_mmap") == 0)
         {
-            /* nothing to check here */
+            defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "lz4_acceleration") == 0)
+        {
+            /* TODO: validate it's an integer */
         }
         else
         {
@@ -157,33 +186,15 @@ tuple_fdw_validator(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
-static List *
-parse_attributes_list(char *start, Oid relid)
-{
-    List       *attrs = NIL;
-    char       *token;
-    const char *delim = " ";
-    AttrNumber  attnum;
-
-    while ((token = strtok(start, delim)) != NULL)
-    {
-        if ((attnum = get_attnum(relid, token)) == InvalidAttrNumber)
-            elog(ERROR, ELOG_PREFIX "invalid attribute name '%s'", token);
-        attrs = lappend_int(attrs, attnum);
-        start = NULL;
-    }
-
-    return attrs;
-}
-
 static void
 extract_table_options(Oid relid, struct fdw_options *options)
 {
 	ForeignTable   *table;
     ListCell       *lc;
 
-    table = GetForeignTable(relid);
+    options->lz4_acceleration = 1;  /* default acceleration */
 
+    table = GetForeignTable(relid);
     foreach(lc, table->options)
     {
 		DefElem    *def = (DefElem *) lfirst(lc);
@@ -201,6 +212,10 @@ extract_table_options(Oid relid, struct fdw_options *options)
         {
             options->use_mmap = defGetBoolean(def);
         }
+        else if (strcmp(def->defname, "lz4_acceleration") == 0)
+        {
+            options->lz4_acceleration = pg_atoi(defGetString(def), 4, 0);
+        }
     }
 }
 
@@ -211,6 +226,7 @@ fdw_options_to_list(struct fdw_options *o)
 
     lst = lappend(lst, makeString(o->filename));
     lst = lappend(lst, makeInteger(o->use_mmap));
+    lst = lappend(lst, makeInteger(o->lz4_acceleration));
     /* 
      * We don't pass `attrs_sorted` further to the executer as it is only used
      * in the planner
@@ -325,7 +341,7 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
 
     state = palloc0(sizeof(StorageState));
 
-    Assert(list_length(fdw_private) == 2);
+    Assert(list_length(fdw_private) == 3);
     filename = strVal(linitial(fdw_private));
     use_mmap = intVal(lsecond(fdw_private));
 
@@ -408,6 +424,8 @@ tupleBeginForeignModify(ModifyTableState *mtstate,
     LockRelation(rel, AccessExclusiveLock);
 
     StorageInit(state, filename, false, false);
+    state->lz4_acceleration = intVal(lthird(fdw_private));
+
 	resultRelInfo->ri_FdwState = state;
 }
 

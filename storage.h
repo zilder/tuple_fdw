@@ -67,6 +67,7 @@ typedef struct
     StorageFileHeader    file_header;
     Block       cur_block;
     Size        cur_offset;    /* offset within the last_block */
+    int         lz4_acceleration;
 } StorageState;
 
 

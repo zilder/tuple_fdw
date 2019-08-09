@@ -6,6 +6,10 @@ Because of the nature of the storage it doesn't support concurrent writes or mix
 
 Some visualization of the internals of the storage can be found in `storage.c`.
 
+## Dependencies
+
+`tuple_fdw` requires `liblz4` installed.
+
 ## Build
 
 Like with any other postgres extensions after clone just run in command line:
@@ -23,11 +27,12 @@ make install PG_CONFIG=/path/to/pg_config
 ## Using
 
 
-When creating foreign table using `tuple_fdw` the following parameter are avaliable:
+When creating foreign table using `tuple_fdw` the following options are avaliable:
 
 * `filename`: path to the storage file; if file doesn't exist it will be created automatically;
 * `use_mmap`: use `mmap` for reading data rather than `fread`; in heavy concurrent read workload it might be more efficient to use mmap;
-* `sorted` specifies columns by which the dataset is ordered; it may help building more efficient execution plans which imply ordering. 
+* `sorted` specifies columns by which the dataset is ordered; it may help building more efficient execution plans which imply ordering;
+* `lz4_acceleration`: specific `lz4` parameter responsible for performance; the higher value the faster compression/decompression and the lower compression ratio.
 
 ## Example
 

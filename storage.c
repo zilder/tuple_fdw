@@ -245,7 +245,7 @@ compress_current_block(StorageState *state)
                              block_header->data,
                              BLOCK_SIZE,
                              estimate,
-                             1); /* TODO: configurable? */
+                             state->lz4_acceleration);
     if (size == 0)
         elog(ERROR, "tuple_fdw: compression failed");
     block_header->compressed_size = size;
