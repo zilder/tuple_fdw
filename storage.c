@@ -343,6 +343,17 @@ mmap_file(StorageState *state)
 }
 
 void
+unmap_file(StorageState *state)
+{
+    if (munmap(state->mmaped_file, state->mmaped_size) == -1)
+    {
+        const char *err = strerror(errno);
+
+        elog(ERROR, "tuple_fdw: munmap failed: %s", err);
+    }
+}
+
+void
 StorageInit(StorageState *state,
             const char *filename,
             bool readonly,
@@ -435,15 +446,10 @@ StorageRelease(StorageState *state)
     if (status == BS_NEW || status == BS_MODIFIED)
         flush_last_block(state);
 
-    if (state->mmaped_file)
-    {
-        if (munmap(state->mmaped_file, state->mmaped_size) == -1)
-        {
-            const char *err = strerror(errno);
-
-            elog(ERROR, "tuple_fdw: munmap failed: %s", err);
-        }
-    }
+    /*
+     * mmaped file (if any) will automatically be unmmaped due to callback (see
+     * `unmap_file_callback`)
+     */
 
     FreeFile(state->file);
 }

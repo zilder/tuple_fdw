@@ -77,5 +77,6 @@ void StorageInit(StorageState *state,
 void StorageInsertTuple(StorageState *state, HeapTuple tuple);
 HeapTuple StorageReadTuple(StorageState *state);
 void StorageRelease(StorageState *state);
+void unmap_file(StorageState *state);
 
 #endif /* TUPLE_STORAGE_H */

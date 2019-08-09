@@ -306,6 +306,14 @@ tupleGetForeignPlan(PlannerInfo *root,
 }
 
 static void
+unmap_file_callback(void *arg)
+{
+    StorageState *state = (StorageState *) arg;
+
+    unmap_file(state);
+}
+
+static void
 tupleBeginForeignScan(ForeignScanState *node, int eflags)
 {
     StorageState   *state;
@@ -321,8 +329,19 @@ tupleBeginForeignScan(ForeignScanState *node, int eflags)
     use_mmap = intVal(lsecond(fdw_private));
 
     /* open file */
-    /* TODO: optional use_mmap */
     StorageInit(state, filename, true, use_mmap);
+
+    if (use_mmap)
+    {
+        EState     *estate = node->ss.ps.state;
+        MemoryContextCallback *callback;
+
+        /* unmap files automatically by using memory context callback */
+        callback = palloc0(sizeof(MemoryContextCallback));
+        callback->func = unmap_file_callback;
+        callback->arg = (void *) state;
+        MemoryContextRegisterResetCallback(estate->es_query_cxt, callback);
+    }
 
     node->fdw_state = state;
 }
@@ -331,7 +350,7 @@ static TupleTableSlot *
 tupleIterateForeignScan(ForeignScanState *node)
 {
     StorageState   *state = (StorageState *) node->fdw_state;
-	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
+    TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
     HeapTuple tuple;
 
 	ExecClearTuple(slot);
