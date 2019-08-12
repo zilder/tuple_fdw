@@ -16,12 +16,58 @@ SELECT * FROM example;
 ----+-----
 (0 rows)
 
-INSERT INTO example VALUES (1, 'eins'), (2, 'zwei'), (3, 'drei');
+INSERT INTO example VALUES (1, 'uno'), (2, 'dos'), (3, 'tres');
 SELECT * FROM example;
  id | msg  
 ----+------
-  1 | eins
-  2 | zwei
-  3 | drei
+  1 | uno
+  2 | dos
+  3 | tres
 (3 rows)
 
+/* using mmap */
+DROP FOREIGN TABLE example;
+CREATE FOREIGN TABLE example (
+    id      SERIAL,
+    msg     TEXT
+)
+SERVER tuple_srv
+OPTIONS (filename '@abs_srcdir@/sql/example.bin', use_mmap 'true');
+SELECT * FROM example;
+ id | msg  
+----+------
+  1 | uno
+  2 | dos
+  3 | tres
+(3 rows)
+
+/* predefined ordering */
+DROP FOREIGN TABLE example;
+CREATE FOREIGN TABLE example (
+    id      SERIAL,
+    msg     TEXT
+)
+SERVER tuple_srv
+OPTIONS (filename '@abs_srcdir@/sql/example.bin', sorted 'id');
+EXPLAIN (COSTS OFF) SELECT * FROM example ORDER BY id;
+       QUERY PLAN        
+-------------------------
+ Foreign Scan on example
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT * FROM example ORDER BY id DESC;
+          QUERY PLAN           
+-------------------------------
+ Sort
+   Sort Key: id DESC
+   ->  Foreign Scan on example
+(3 rows)
+
+/* ommited filename */
+DROP FOREIGN TABLE example;
+CREATE FOREIGN TABLE example (
+    id      SERIAL,
+    msg     TEXT
+)
+SERVER tuple_srv;
+ERROR:  tuple_fdw: filename is required
