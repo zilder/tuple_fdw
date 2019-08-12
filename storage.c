@@ -384,6 +384,9 @@ StorageInsertTuple(StorageState *state, HeapTuple tuple)
     char *buf;
     Size tuple_length = MAXALIGN(tuple->t_len + StorageTupleHeaderSize);
 
+    if (tuple_length > BLOCK_SIZE)
+        elog(ERROR, "tuple_fdw: maximum tuple size exceeded");
+
     if (BlockIsInvalid(state->cur_block))
     {
         load_last_block(state);
